@@ -12,6 +12,7 @@ from tqdm import tqdm
 
 import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
+from sklearn.feature_extraction.text import TfidfVectorizer
 
 MODEL_PATH = 'tfidf.pickle'
 INDEX_PATH = 'index.pickle'
@@ -30,17 +31,7 @@ kTFIDF_TEST_QUESTIONS = {"This capital of England": ['Maine', 'Boston'],
                         "located outside Boston, the oldest University in the United States": ['College_of_William_&_Mary', 'Rhode_Island']}
 
 
-class DummyVectorizer:
-    """
-    A dumb vectorizer that only creates a random matrix instead of something real.
-    """
-    def __init__(self, width=50):
-        self.width = width
-        self.vocabulary_ = {}
-    
-    def transform(self, questions):
-        import numpy as np
-        return np.random.rand(len(questions), self.width)
+# Removed DummyVectorizer - now using sklearn's TfidfVectorizer directly
 
 class TfidfGuesser(Guesser):
     """
@@ -55,8 +46,10 @@ class TfidfGuesser(Guesser):
         max_df -- we use the sklearn vectorizer parameters, this for max doc freq
         """
 
-        # You'll need add the vectorizer here and replace this fake vectorizer
-        self.tfidf_vectorizer = DummyVectorizer()
+        # Using sklearn's TfidfVectorizer with proper parameters
+        self.tfidf_vectorizer = TfidfVectorizer(min_df=min_df, max_df=max_df, 
+                                               stop_words='english', 
+                                               lowercase=True)
         self.tfidf = None 
         self.questions = None
         self.answers = None
@@ -75,6 +68,8 @@ class TfidfGuesser(Guesser):
         Guesser.train(self, training_data, answer_field, split_by_sentence, min_length,
                       max_length, remove_missing_pages)
 
+        # Fit the vectorizer on our questions and then transform
+        self.tfidf_vectorizer.fit(self.questions)
         self.tfidf = self.tfidf_vectorizer.transform(self.questions)
         logging.info("Creating tf-idf dataframe with %i" % len(self.questions))
         
@@ -99,22 +94,17 @@ class TfidfGuesser(Guesser):
         question -- Raw text of the question
         max_n_guesses -- How many top guesses to return
         """
-        top_questions = []
-        top_answers = []
-        top_sim = []
-
         # Compute the cosine similarity
         question_tfidf = self.tfidf_vectorizer.transform([question])
         cosine_similarities = cosine_similarity(question_tfidf, self.tfidf)
         cos = cosine_similarities[0]
-        indices = cos.argsort()[::-1]
+        indices = cos.argsort()[::-1]  # Sort in descending order
         guesses = []
-        for i in range(max_n_guesses):
-            # The line below is wrong but lets the code run for the homework.
-            # Remove it or fix it!
-            idx = i
-            guess =  {"question": self.questions[idx], "guess": self.answers[idx],
-                      "confidence": cos[idx]}
+        for i in range(min(max_n_guesses, len(indices))):
+            # Use the correct index from the sorted indices
+            idx = indices[i]
+            guess = {"question": self.questions[idx], "guess": self.answers[idx],
+                     "confidence": cos[idx]}
             guesses.append(guess)
         return guesses
 
@@ -135,33 +125,37 @@ class TfidfGuesser(Guesser):
         which is a good use of the argpartition function from numpy.
         """
 
-        # IMPORTANT NOTE FOR HOMEWORK: you do not need to complete
-        # batch_guess.  If you're having trouble with this, just
-        # delete the function, and the parent class will emulate the
-        # functionality one row at a time.
-        
-        from math import floor
-    
+        # Implement efficient batch guessing using matrix operations
         all_guesses = []
 
         logging.info("Querying matrix of size %i with block size %i" %
                      (len(questions), block_size))
 
-        # The next line of code is bogus, this needs to be fixed
-        # to give you a real answer.
-        top_hits = np.array([list(range(max_n_guesses-1, -1, -1))]*block_size)
         for start in tqdm(range(0, len(questions), block_size)):
-            stop = start+block_size
+            stop = min(start + block_size, len(questions))
             block = questions[start:stop]
+            
             logging.info("Block %i to %i (%i elements)" % (start, stop, len(block)))
             
+            # Transform the block of questions
+            block_tfidf = self.tfidf_vectorizer.transform(block)
             
-
-            for question in range(len(block)):
+            # Compute cosine similarity between block and all training questions
+            cosine_similarities = cosine_similarity(block_tfidf, self.tfidf)
+            
+            # For each question in the block, find top similarities
+            for i, question_similarities in enumerate(cosine_similarities):
+                # Get indices of top similarities in descending order
+                top_indices = np.argsort(question_similarities)[::-1][:max_n_guesses]
+                
                 guesses = []
-                for idx in list(top_hits[question]):
-                    score = 0.0
-                    guesses.append({"guess": self.answers[idx], "confidence": score, "question": self.questions[idx]})
+                for idx in top_indices:
+                    guess = {
+                        "guess": self.answers[idx], 
+                        "confidence": question_similarities[idx], 
+                        "question": self.questions[idx]
+                    }
+                    guesses.append(guess)
                 all_guesses.append(guesses)
 
         assert len(all_guesses) == len(questions), "Guesses (%i) != questions (%i)" % (len(all_guesses), len(questions))
