@@ -14,6 +14,7 @@ from tqdm import tqdm
 
 import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
+from sklearn.feature_extraction.text import TfidfVectorizer
 
 MODEL_PATH = 'tfidf.pickle'
 INDEX_PATH = 'index.pickle'
@@ -59,7 +60,7 @@ class TfidfGuesser(Guesser):
         """
 
         # You'll need add the vectorizer here and replace this fake vectorizer
-        self.tfidf_vectorizer = DummyVectorizer()
+        self.tfidf_vectorizer = TfidfVectorizer(min_df=min_df, max_df=max_df, stop_words='english')
         self.tfidf = None 
         self.questions = None
         self.answers = None
@@ -78,7 +79,7 @@ class TfidfGuesser(Guesser):
         Guesser.train(self, training_data, answer_field, split_by_sentence, min_length,
                       max_length, remove_missing_pages)
 
-        self.tfidf = self.tfidf_vectorizer.transform(self.questions)
+        self.tfidf = self.tfidf_vectorizer.fit_transform(self.questions)
         logging.info("Creating tf-idf dataframe with %i" % len(self.questions))
         
     def save(self):
@@ -113,9 +114,7 @@ class TfidfGuesser(Guesser):
         indices = cos.argsort()[::-1]
         guesses = []
         for i in range(max_n_guesses):
-            # The line below is wrong but lets the code run for the homework.
-            # Remove it or fix it!
-            idx = i
+            idx = indices[i]
             guess =  {"question": self.questions[idx], "guess": self.answers[idx],
                       "confidence": cos[idx]}
             guesses.append(guess)
